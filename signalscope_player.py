@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 # ─── Color scheme (matches SignalScope logger web UI) ─────────────────────────
 C = {
@@ -277,6 +277,42 @@ class DirectDataSource(DataSource):
                 tzinfo=_dt.timezone.utc).timestamp()
         except ValueError:
             return []
+
+        # ── Sidecar JSON (logger >= 1.5.5) ─────────────────────────────────
+        # Each logger writes meta_{owner}.json per day dir.  Read all of them
+        # and merge — gives full metadata across all instances on shared dirs.
+        try:
+            day_dir = self._root / slug / date
+            if not day_dir.is_dir():
+                # Also check one level up (root is a slug directory)
+                day_dir = self._root.parent / slug / date
+            if day_dir.is_dir():
+                seen: dict = {}
+                for meta_file in sorted(day_dir.glob("meta_*.json")):
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            entries = json.load(f)
+                        for e in entries:
+                            ts    = e.get("ts", 0)
+                            etype = e.get("type", "")
+                            key   = (round(ts, 1), etype)
+                            if key not in seen:
+                                seen[key] = {
+                                    "ts_s":      ts - midnight,
+                                    "type":      etype,
+                                    "title":     e.get("title",     ""),
+                                    "artist":    e.get("artist",    ""),
+                                    "show_name": e.get("show_name", ""),
+                                    "presenter": e.get("presenter", ""),
+                                }
+                    except Exception:
+                        pass
+                if seen:
+                    return sorted(seen.values(), key=lambda e: e["ts_s"])
+        except Exception:
+            pass
+
+        # ── Legacy SQLite fallback (logger 1.5.2–1.5.4 metadata.db) ────────
         _SQL = ("SELECT ts, type, title, artist, show_name, presenter "
                 "FROM metadata_log WHERE stream=? AND ts>=? AND ts<? ORDER BY ts")
 
@@ -290,8 +326,6 @@ class DirectDataSource(DataSource):
                      "show_name": r["show_name"] or "", "presenter": r["presenter"] or ""}
                     for r in rows]
 
-        # Shared metadata.db (logger >= 1.5.2) — sits in the recording root,
-        # written by all logger instances sharing that directory.
         for db_path in [self._root / "metadata.db",
                         self._root.parent / "metadata.db"]:
             if db_path.exists():
@@ -303,7 +337,7 @@ class DirectDataSource(DataSource):
                     pass
                 break
 
-        # Legacy fallback: logger_index.db (pre-1.5.2, local app directory)
+        # ── Legacy fallback: logger_index.db (pre-1.5.2) ───────────────────
         for db_path in [self._root / "logger_index.db",
                         self._root.parent / "logger_index.db"]:
             if db_path.exists():
