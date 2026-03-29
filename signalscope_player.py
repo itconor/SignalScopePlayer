@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.4"
+__version__ = "1.3.5"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1076,8 +1076,9 @@ class MainWindow(QMainWindow):
         self._playing_seg    = None
         self._workers        = []
         self._mark_in        = -1
-        self._mark_out       = -1
+        self._mark_out        = -1
         self._pending_seek_ms = 0
+        self._play_gen        = 0   # incremented on each _play_segment call
 
         self.setWindowTitle(f"SignalScope Player — {ds.mode()} mode")
         self.setMinimumSize(900, 600)
@@ -1542,8 +1543,13 @@ class MainWindow(QMainWindow):
             self._populate_segments(result)
         elif task == "metadata":
             self._apply_metadata(result)
-        elif task == "play":
-            if result and self._playing_seg:
+        elif task.startswith("play:"):
+            # Discard stale results — only the most recent generation applies
+            try:
+                gen = int(task.split(":")[1])
+            except (IndexError, ValueError):
+                gen = -1
+            if result and self._playing_seg and gen == self._play_gen:
                 self._player.setSource(QUrl(result))
                 self._player.play()
                 self._play_btn.setText("⏸")
@@ -1638,7 +1644,8 @@ class MainWindow(QMainWindow):
 
         if self._ds.mode() == "hub":
             self._p_sub.setText("Connecting…")
-            self._fetch("play", self._ds.prepare_play,
+            self._play_gen += 1
+            self._fetch(f"play:{self._play_gen}", self._ds.prepare_play,
                         self._current_slug, self._current_date,
                         filename, seek_s, self._current_site)
         else:
@@ -1709,6 +1716,7 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._play_btn.setText("▶")
         self._play_btn.setEnabled(False)
+        self._pending_seek_ms = 0
         for b in (self._skip_bm60, self._skip_bm30, self._skip_fp30, self._skip_fp60):
             b.setEnabled(False)
         self._play_timer.stop()
@@ -1718,11 +1726,12 @@ class MainWindow(QMainWindow):
         self._time_label.setText("00:00:00")
 
     def _on_media_status(self, status):
-        # Apply deferred seek once the file is ready (direct mode only)
+        # Apply deferred seek once a local file is ready (direct mode only).
+        # Never call setPosition on a hub relay stream — relay is non-seekable.
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
-            if self._pending_seek_ms > 0:
+            if self._pending_seek_ms > 0 and self._ds.mode() == "direct":
                 self._player.setPosition(self._pending_seek_ms)
-                self._pending_seek_ms = 0
+            self._pending_seek_ms = 0
         elif status == QMediaPlayer.EndOfMedia:
             # Auto-advance to next segment
             if self._playing_seg and self._segments:
