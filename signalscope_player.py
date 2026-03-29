@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -680,7 +680,7 @@ class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("SignalScope Player — Connect")
-        self.setFixedSize(420, 260)
+        self.setFixedSize(500, 430)
         self.setStyleSheet(f"""
             QDialog {{ background: {C['bg']}; color: {C['tx']}; }}
             QLabel {{ color: {C['tx']}; font-size: 13px; }}
@@ -707,19 +707,20 @@ class ConnectionDialog(QDialog):
         settings = _load_settings()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
 
         # Logo / title
         logo_path = _asset("signalscope_logo.jpg")
         if logo_path:
             from PySide6.QtGui import QPixmap
             logo_lbl = QLabel()
-            px = QPixmap(logo_path).scaledToWidth(360, Qt.SmoothTransformation)
+            px = QPixmap(logo_path).scaledToHeight(130, Qt.SmoothTransformation)
             logo_lbl.setPixmap(px)
             logo_lbl.setAlignment(Qt.AlignCenter)
             layout.addWidget(logo_lbl)
             sub = QLabel("Player")
-            sub.setStyleSheet(f"font-size: 13px; color: {C['mu']}; margin-top: -6px;")
+            sub.setStyleSheet(f"font-size: 13px; color: {C['mu']};")
             sub.setAlignment(Qt.AlignCenter)
             layout.addWidget(sub)
         else:
@@ -836,7 +837,7 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("About SignalScope Player")
-        self.setFixedSize(420, 320)
+        self.setFixedSize(460, 360)
         self.setStyleSheet(f"""
             QDialog   {{ background: {C['bg']}; }}
             QWidget   {{ background: {C['bg']}; color: {C['tx']}; }}
@@ -858,7 +859,7 @@ class AboutDialog(QDialog):
         if logo_path:
             from PySide6.QtGui import QPixmap
             logo_lbl = QLabel()
-            px = QPixmap(logo_path).scaledToWidth(360, Qt.SmoothTransformation)
+            px = QPixmap(logo_path).scaledToHeight(120, Qt.SmoothTransformation)
             logo_lbl.setPixmap(px)
             logo_lbl.setAlignment(Qt.AlignCenter)
             lay.addWidget(logo_lbl)
