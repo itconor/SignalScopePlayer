@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -38,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -191,13 +192,36 @@ class HubDataSource(DataSource):
             time.sleep(3)
         return data.get("events", [])
 
+    def prepare_play(self, slug: str, date: str, filename: str,
+                     seek_s: float, site: str) -> str:
+        """POST to /play_file and return the full playback URL (token included).
+
+        In hub/relay mode: triggers the client to send raw file bytes through
+        the relay slot; returns the relay stream URL.
+        In single-node mode: returns the direct /audio_file URL.
+        Both URLs include ?token= so QMediaPlayer can fetch without custom headers.
+        """
+        body = json.dumps({
+            "slug": slug, "date": date, "filename": filename, "site": site,
+        }).encode()
+        req  = urllib.request.Request(
+            f"{self._url}/api/mobile/logger/play_file",
+            data=body,
+            headers={"Authorization": f"Bearer {self._token}",
+                     "Content-Type": "application/json"},
+        )
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "play_file failed"))
+        stream_path = data["stream_url"]
+        sep = "&" if "?" in stream_path else "?"
+        return f"{self._url}{stream_path}{sep}token={urllib.parse.quote(self._token)}"
+
     def audio_url(self, slug: str, date: str, filename: str,
                   seek_s: float = 0) -> str:
-        qs = urllib.parse.urlencode({
-            "slug": slug, "date": date, "filename": filename,
-            "seek_s": seek_s, "token": self._token,
-        })
-        return f"{self._url}/api/mobile/logger/stream_pcm?{qs}"
+        # Unused in hub mode (prepare_play is used instead) — kept for ABC
+        return ""
 
     def mode(self) -> str:
         return "hub"
@@ -1482,6 +1506,13 @@ class MainWindow(QMainWindow):
             self._populate_segments(result)
         elif task == "metadata":
             self._apply_metadata(result)
+        elif task == "play":
+            if result and self._playing_seg:
+                self._player.setSource(QUrl(result))
+                self._player.play()
+                self._play_btn.setText("⏸")
+                self._play_timer.start()
+                self._p_sub.setText(f"{self._current_slug} · {self._current_date}")
         # Cleanup finished workers
         self._workers = [w for w in self._workers if w.isRunning()]
 
@@ -1561,25 +1592,26 @@ class MainWindow(QMainWindow):
     def _play_segment(self, seg: dict, seek_s: float = 0):
         self._stop_playback()
         self._playing_seg = seg
-        start_s = seg.get("start_s", 0)
+        start_s  = seg.get("start_s", 0)
         filename = seg.get("filename", "")
 
         self._seg_grid.set_playing(int(start_s))
         self._p_title.setText(f"{_fmt_time(start_s)}  —  {filename}")
-        self._p_sub.setText(f"{self._current_slug} · {self._current_date}")
         self._play_btn.setEnabled(True)
 
-        url = self._ds.audio_url(
-            self._current_slug, self._current_date, filename, seek_s)
-
-        if self._ds.mode() == "direct":
-            self._player.setSource(QUrl.fromLocalFile(url))
+        if self._ds.mode() == "hub":
+            self._p_sub.setText("Connecting…")
+            self._fetch("play", self._ds.prepare_play,
+                        self._current_slug, self._current_date,
+                        filename, seek_s, self._current_site)
         else:
-            self._player.setSource(QUrl(url))
-
-        self._player.play()
-        self._play_btn.setText("⏸")
-        self._play_timer.start()
+            url = self._ds.audio_url(
+                self._current_slug, self._current_date, filename, seek_s)
+            self._player.setSource(QUrl.fromLocalFile(url))
+            self._p_sub.setText(f"{self._current_slug} · {self._current_date}")
+            self._player.play()
+            self._play_btn.setText("⏸")
+            self._play_timer.start()
 
     def _toggle_play(self):
         if self._player.playbackState() == QMediaPlayer.PlayingState:
@@ -1627,12 +1659,17 @@ class MainWindow(QMainWindow):
         self._p_sub.setText(f"Playback error: {error}")
 
     def _on_scrub_seek(self):
-        if self._playing_seg and self._ds.mode() == "direct":
-            pos_ms = self._scrub.value() * 1000
-            self._player.setPosition(pos_ms)
-        elif self._playing_seg and self._ds.mode() == "hub":
-            # Hub mode: restart with seek offset
-            self._play_segment(self._playing_seg, seek_s=self._scrub.value())
+        if not self._playing_seg:
+            return
+        if self._ds.mode() == "direct":
+            self._player.setPosition(self._scrub.value() * 1000)
+        elif self._ds.mode() == "hub":
+            if self._current_site:
+                # Relay mode: re-request stream (file always starts from beginning)
+                self._play_segment(self._playing_seg)
+            else:
+                # Single-node hub: /audio_file supports Range, QMediaPlayer can seek
+                self._player.setPosition(self._scrub.value() * 1000)
 
     def _update_playback_position(self):
         # Handled by _on_position_changed for direct mode
