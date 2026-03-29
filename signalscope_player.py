@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.2.2"
+__version__ = "1.3.0"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -386,21 +386,36 @@ class FetchWorker(QThread):
 # ─── Custom Widgets ───────────────────────────────────────────────────────────
 
 class DayBar(QWidget):
-    """288-block overview bar representing 24 hours of 5-minute segments."""
-    clicked = Signal(int)  # start_s of clicked block
+    """Zoomable, pannable 24-hour timeline bar.
+
+    Scroll wheel to zoom in/out (centred on cursor).
+    Click-drag to pan. Single click (no drag) seeks. Double-click resets zoom.
+    """
+    clicked      = Signal(int)          # start_s of clicked position
+    view_changed = Signal(float, float) # (offset_s, view_dur_s)
+
+    MIN_ZOOM = 1.0
+    MAX_ZOOM = 48.0   # ~30 minutes visible at max
+    LABEL_H  = 18     # px reserved for time labels at top
 
     def __init__(self):
         super().__init__()
-        self._blocks = [None] * 288  # segment dicts or None
-        self._head_s = -1            # playback head position (seconds)
-        self._mark_in = -1
-        self._mark_out = -1
-        self._hover_x = -1
-        self.setFixedHeight(32)
+        self._blocks          = [None] * 288
+        self._head_s          = -1.0
+        self._mark_in         = -1.0
+        self._mark_out        = -1.0
+        self._zoom            = 1.0
+        self._offset_s        = 0.0
+        self._drag_start_x    = -1.0
+        self._drag_start_off  = 0.0
+        self._dragging        = False
+        self.setFixedHeight(96)
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
-    def set_segments(self, segs: list):
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def set_segments(self, segs: list, *_):
         self._blocks = [None] * 288
         for seg in segs:
             idx = int(seg.get("start_s", 0)) // SEG_SECS
@@ -413,67 +428,163 @@ class DayBar(QWidget):
         self.update()
 
     def set_marks(self, in_s: float, out_s: float):
-        self._mark_in = in_s
+        self._mark_in  = in_s
         self._mark_out = out_s
         self.update()
 
+    # ── Internal helpers ────────────────────────────────────────────────────
+
+    @property
+    def _view_dur(self) -> float:
+        return 86400.0 / self._zoom
+
+    def _clamp_offset(self):
+        self._offset_s = max(0.0, min(86400.0 - self._view_dur, self._offset_s))
+
+    def _s_to_x(self, s: float) -> float:
+        return (s - self._offset_s) / self._view_dur * self.width()
+
+    def _x_to_s(self, x: float) -> float:
+        return self._offset_s + x / self.width() * self._view_dur
+
+    def _tick_interval(self) -> tuple:
+        """Return (tick_seconds, strftime_fmt) appropriate for current zoom."""
+        vd = self._view_dur
+        if   vd > 14400: return 3600,  "%H:%M"
+        elif vd >  3600: return  900,  "%H:%M"
+        elif vd >   900: return  300,  "%H:%M"
+        else:            return   60,  "%H:%M"
+
+    # ── Paint ───────────────────────────────────────────────────────────────
+
     def paintEvent(self, event):
-        p = QPainter(self)
+        import datetime as _dt
+        p   = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
+        w, h  = self.width(), self.height()
+        lh    = self.LABEL_H
+        bar_y = lh
+        bar_h = h - lh
 
-        # Background
-        p.fillRect(0, 0, w, h, QColor(C["seg_none"]))
-        p.setPen(QPen(QColor(C["bor"]), 1))
-        p.drawRoundedRect(0, 0, w - 1, h - 1, 4, 4)
+        # Bar background
+        p.fillRect(0, bar_y, w, bar_h, QColor(C["seg_none"]))
 
-        # Blocks
-        bw = w / 288.0
+        # Segment blocks
         for i, seg in enumerate(self._blocks):
-            x = int(i * bw)
-            bx = int((i + 1) * bw) - x
-            if seg:
-                p.fillRect(x, 1, bx, h - 2, QColor(_seg_color(seg)))
+            if seg is None:
+                continue
+            s0 = i * SEG_SECS
+            s1 = s0 + SEG_SECS
+            x1 = int(self._s_to_x(s0))
+            x2 = int(self._s_to_x(s1))
+            if x2 < 0 or x1 > w:
+                continue
+            x1 = max(0, x1)
+            x2 = min(w, x2)
+            p.fillRect(x1, bar_y + 1, max(1, x2 - x1), bar_h - 2,
+                       QColor(_seg_color(seg)))
 
-        # Mark range
-        if self._mark_in >= 0 and self._mark_out >= 0:
-            x1 = int(self._mark_in / 86400 * w)
-            x2 = int(self._mark_out / 86400 * w)
-            p.fillRect(x1, 0, x2 - x1, h, QColor(23, 168, 255, 50))
+        # Mark range fill
+        if self._mark_in >= 0 and self._mark_out > self._mark_in:
+            x1 = int(self._s_to_x(self._mark_in))
+            x2 = int(self._s_to_x(self._mark_out))
+            p.fillRect(x1, bar_y, max(1, x2 - x1), bar_h,
+                       QColor(23, 168, 255, 50))
 
-        # Marks
+        # Tick lines + labels
+        tick_s, fmt = self._tick_interval()
+        first = int(self._offset_s / tick_s) * tick_s
+        p.setFont(QFont("Segoe UI", 7))
+        tick = first
+        while tick <= self._offset_s + self._view_dur + tick_s:
+            x = int(self._s_to_x(tick))
+            if 0 <= x <= w:
+                p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+                p.drawLine(x, bar_y, x, h)
+                t = _dt.datetime(1970, 1, 1) + _dt.timedelta(seconds=tick)
+                p.setPen(QColor(C["mu"]))
+                p.drawText(QRect(x + 3, 0, 60, lh),
+                           Qt.AlignLeft | Qt.AlignVCenter, t.strftime(fmt))
+            tick += tick_s
+
+        # Mark lines
         for val, col in [(self._mark_in, C["acc"]), (self._mark_out, C["wn"])]:
             if val >= 0:
-                x = int(val / 86400 * w)
+                x = int(self._s_to_x(val))
                 p.setPen(QPen(QColor(col), 2))
-                p.drawLine(x, 0, x, h)
+                p.drawLine(x, bar_y, x, h)
 
         # Playback head
         if self._head_s >= 0:
-            x = int(self._head_s / 86400 * w)
+            x = int(self._s_to_x(self._head_s))
             p.setPen(QPen(QColor(C["ok"]), 2))
-            p.drawLine(x, 0, x, h)
+            p.drawLine(x, bar_y, x, h)
 
-        # Hour ticks
-        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
-        for hr in range(1, 24):
-            x = int(hr / 24 * w)
-            p.drawLine(x, 0, x, h)
+        # Border
+        p.setPen(QPen(QColor(C["bor"]), 1))
+        p.drawRoundedRect(0, bar_y, w - 1, bar_h - 1, 4, 4)
+
+        # Zoom badge
+        if self._zoom > 1.05:
+            p.setPen(QColor(C["acc"]))
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            zm = f"{self._zoom:.1f}×" if self._zoom != int(self._zoom) else f"{int(self._zoom)}×"
+            p.drawText(QRect(w - 50, bar_y + 2, 46, 14),
+                       Qt.AlignRight | Qt.AlignVCenter, zm)
 
         p.end()
 
+    # ── Interaction ─────────────────────────────────────────────────────────
+
+    def wheelEvent(self, event):
+        delta  = event.angleDelta().y()
+        factor = 1.18 if delta > 0 else (1 / 1.18)
+        cur_s  = self._x_to_s(event.position().x())
+        self._zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, self._zoom * factor))
+        self._offset_s = cur_s - event.position().x() / self.width() * self._view_dur
+        self._clamp_offset()
+        self.setCursor(Qt.OpenHandCursor if self._zoom > 1.0 else Qt.PointingHandCursor)
+        self.update()
+        self.view_changed.emit(self._offset_s, self._view_dur)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            frac = event.position().x() / self.width()
-            secs = int(frac * 86400)
-            self.clicked.emit(secs)
+            self._drag_start_x   = event.position().x()
+            self._drag_start_off = self._offset_s
+            self._dragging       = False
+            self.setCursor(Qt.ClosedHandCursor)
 
     def mouseMoveEvent(self, event):
-        self._hover_x = int(event.position().x())
-        frac = event.position().x() / self.width()
-        secs = int(frac * 86400)
-        QToolTip.showText(event.globalPosition().toPoint(),
-                          _fmt_time(secs), self)
+        if (event.buttons() & Qt.LeftButton) and self._drag_start_x >= 0:
+            dx = event.position().x() - self._drag_start_x
+            if abs(dx) > 4:
+                self._dragging = True
+            if self._dragging:
+                self._offset_s = self._drag_start_off - dx / self.width() * self._view_dur
+                self._clamp_offset()
+                self.update()
+                self.view_changed.emit(self._offset_s, self._view_dur)
+        else:
+            secs = max(0, min(86399, int(self._x_to_s(event.position().x()))))
+            QToolTip.showText(event.globalPosition().toPoint(),
+                              _fmt_time(secs), self)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if not self._dragging:
+                secs = max(0, min(86399, int(self._x_to_s(event.position().x()))))
+                self.clicked.emit(secs)
+            self._drag_start_x = -1
+            self._dragging     = False
+            self.setCursor(Qt.OpenHandCursor if self._zoom > 1.0 else Qt.PointingHandCursor)
+
+    def mouseDoubleClickEvent(self, event):
+        """Double-click resets zoom to full day."""
+        self._zoom     = 1.0
+        self._offset_s = 0.0
+        self.setCursor(Qt.PointingHandCursor)
+        self.update()
+        self.view_changed.emit(0.0, 86400.0)
 
 
 class SegmentGrid(QWidget):
@@ -598,18 +709,29 @@ class SegmentGrid(QWidget):
 
 
 class MetaBand(QWidget):
-    """Horizontal band showing metadata spans (tracks, shows, or mics)."""
+    """Horizontal band showing metadata spans (tracks, shows, or mics).
+    Follows the DayBar's zoom/offset via set_view()."""
 
     def __init__(self, band_type: str = "track"):
         super().__init__()
-        self._type = band_type
-        self._events = []
+        self._type      = band_type
+        self._events    = []
+        self._offset_s  = 0.0
+        self._view_dur  = 86400.0
         h = 16 if band_type == "mic" else 22
         self.setFixedHeight(h)
 
     def set_events(self, events: list):
         self._events = [e for e in events if e.get("type") == self._type]
         self.update()
+
+    def set_view(self, offset_s: float, view_dur_s: float):
+        self._offset_s = offset_s
+        self._view_dur = view_dur_s
+        self.update()
+
+    def _s_to_x(self, s: float, w: int) -> float:
+        return (s - self._offset_s) / self._view_dur * w
 
     def paintEvent(self, event):
         if not self._events:
@@ -627,30 +749,31 @@ class MetaBand(QWidget):
                       QColor("#6ee7b7")),
         }
         bg_col, border_col, text_col = colors.get(self._type, colors["track"])
-
-        font = QFont("Segoe UI", 8)
-        p.setFont(font)
+        p.setFont(QFont("Segoe UI", 8))
 
         for i, ev in enumerate(self._events):
-            ts = ev.get("ts_s", 0)
-            # Duration: until next event of same type, or +300s
+            ts      = ev.get("ts_s", 0)
             next_ts = (self._events[i + 1]["ts_s"]
                        if i + 1 < len(self._events) else ts + 300)
-            x1 = int(ts / 86400 * w)
-            x2 = int(next_ts / 86400 * w)
-            sw = max(2, x2 - x1)
+            x1 = int(self._s_to_x(ts, w))
+            x2 = int(self._s_to_x(next_ts, w))
+            if x2 < 0 or x1 > w:
+                continue
+            x1c = max(0, x1)
+            x2c = min(w, x2)
+            sw  = max(2, x2c - x1c)
 
-            p.fillRect(x1, 1, sw, h - 2, bg_col)
-            p.setPen(QPen(border_col, 2))
-            p.drawLine(x1, 1, x1, h - 1)
+            p.fillRect(x1c, 1, sw, h - 2, bg_col)
+            if x1 >= 0:
+                p.setPen(QPen(border_col, 2))
+                p.drawLine(x1, 1, x1, h - 1)
 
-            # Label
             label = ev.get("title") or ev.get("show_name") or ""
             if ev.get("artist"):
                 label = f"{ev['artist']} — {label}" if label else ev["artist"]
             if label and sw > 30:
                 p.setPen(text_col)
-                p.drawText(QRect(x1 + 4, 0, sw - 6, h),
+                p.drawText(QRect(x1c + 4, 0, sw - 6, h),
                            Qt.AlignLeft | Qt.AlignVCenter, label)
 
         p.end()
@@ -1085,32 +1208,67 @@ class MainWindow(QMainWindow):
         content_l.setContentsMargins(0, 0, 0, 0)
         content_l.setSpacing(0)
 
-        # Day bar
+        # ── Timeline panel ──
         daybar_wrap = QWidget()
         daybar_wrap.setStyleSheet(f"background: {C['bg']};")
         db_l = QVBoxLayout(daybar_wrap)
-        db_l.setContentsMargins(12, 8, 12, 4)
+        db_l.setContentsMargins(12, 8, 12, 6)
+        db_l.setSpacing(2)
+
+        # Hint label
+        hint = QLabel("Scroll to zoom · Drag to pan · Double-click to reset")
+        hint.setStyleSheet(f"font-size: 10px; color: {C['mu']}; background: transparent;")
+        hint.setAlignment(Qt.AlignRight)
+        db_l.addWidget(hint)
+
         self._daybar = DayBar()
         self._daybar.clicked.connect(self._on_daybar_click)
         db_l.addWidget(self._daybar)
 
         # Meta bands
+        self._show_band  = MetaBand("show")
         self._track_band = MetaBand("track")
-        self._show_band = MetaBand("show")
-        self._mic_band = MetaBand("mic")
+        self._mic_band   = MetaBand("mic")
         db_l.addWidget(self._show_band)
         db_l.addWidget(self._track_band)
         db_l.addWidget(self._mic_band)
-        content_l.addWidget(daybar_wrap)
 
-        # Segment grid (scrollable)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Sync meta bands to daybar zoom/pan
+        def _sync_view(off, dur):
+            self._show_band.set_view(off, dur)
+            self._track_band.set_view(off, dur)
+            self._mic_band.set_view(off, dur)
+        self._daybar.view_changed.connect(_sync_view)
+
+        # Grid toggle button row
+        grid_toggle_row = QWidget()
+        grid_toggle_row.setStyleSheet(f"background: {C['bg']};")
+        gt_l = QHBoxLayout(grid_toggle_row)
+        gt_l.setContentsMargins(12, 2, 12, 2)
+        self._grid_toggle_btn = QPushButton("▶  Show Segment Grid")
+        self._grid_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C['mu']};
+                border: none; font-size: 11px; text-align: left; padding: 2px 0;
+            }}
+            QPushButton:hover {{ color: {C['acc']}; }}
+        """)
+        self._grid_toggle_btn.clicked.connect(self._toggle_seg_grid)
+        gt_l.addWidget(self._grid_toggle_btn)
+        gt_l.addStretch()
+
+        content_l.addWidget(daybar_wrap)
+        content_l.addWidget(grid_toggle_row)
+
+        # Segment grid (scrollable) — hidden by default
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._seg_grid = SegmentGrid()
         self._seg_grid.segment_clicked.connect(self._on_segment_clicked)
-        scroll.setWidget(self._seg_grid)
-        content_l.addWidget(scroll, 1)
+        self._scroll_area.setWidget(self._seg_grid)
+        self._scroll_area.setVisible(False)
+        content_l.addWidget(self._scroll_area, 1)
 
         # ── Player bar ──
         player_wrap = QWidget()
@@ -1286,7 +1444,15 @@ class MainWindow(QMainWindow):
             self._track_band.set_events([])
             self._show_band.set_events([])
             self._mic_band.set_events([])
+            self._scroll_area.setVisible(False)
+            self._grid_toggle_btn.setText("▶  Show Segment Grid")
             self._load_catalog()
+
+    def _toggle_seg_grid(self):
+        visible = self._scroll_area.isVisible()
+        self._scroll_area.setVisible(not visible)
+        self._grid_toggle_btn.setText(
+            "▼  Hide Segment Grid" if not visible else "▶  Show Segment Grid")
 
     def _setup_audio(self):
         self._player = QMediaPlayer()
