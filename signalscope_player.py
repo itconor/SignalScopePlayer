@@ -39,13 +39,18 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.5"
+__version__ = "1.3.6"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
-    """Return absolute path to a bundled asset, or '' if not found."""
-    here = Path(__file__).parent
-    p = here / name
+    """Return absolute path to a bundled asset, or '' if not found.
+
+    Works both in normal Python and when frozen with PyInstaller --onefile
+    (assets are extracted to sys._MEIPASS at runtime).
+    """
+    import sys
+    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+    p = base / name
     return str(p) if p.exists() else ""
 
 # ─── Color scheme (matches SignalScope logger web UI) ─────────────────────────
