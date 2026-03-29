@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 # ─── Color scheme (matches SignalScope logger web UI) ─────────────────────────
 C = {
@@ -810,6 +810,86 @@ class ConnectionDialog(QDialog):
         self.accept()
 
 
+# ─── About Dialog ─────────────────────────────────────────────────────────────
+
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About SignalScope Player")
+        self.setFixedSize(420, 320)
+        self.setStyleSheet(f"""
+            QDialog   {{ background: {C['bg']}; }}
+            QWidget   {{ background: {C['bg']}; color: {C['tx']}; }}
+            QLabel    {{ background: transparent; color: {C['tx']}; }}
+            QPushButton {{
+                background: {C['sur']}; color: {C['tx']};
+                border: 1px solid {C['bor']}; border-radius: 5px;
+                padding: 6px 18px; font-size: 13px;
+            }}
+            QPushButton:hover {{ background: {C['acc']}; color: #fff; }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 20)
+        lay.setSpacing(10)
+
+        # Icon + name row
+        top = QHBoxLayout()
+        icon = QLabel("🎙")
+        icon.setStyleSheet("font-size: 36px;")
+        top.addWidget(icon)
+        name_col = QVBoxLayout()
+        name_col.setSpacing(2)
+        name_lbl = QLabel("SignalScope Player")
+        name_lbl.setStyleSheet(
+            f"font-size: 18px; font-weight: bold; color: {C['acc']};")
+        ver_lbl = QLabel(f"Version {__version__}")
+        ver_lbl.setStyleSheet(f"font-size: 12px; color: {C['mu']};")
+        name_col.addWidget(name_lbl)
+        name_col.addWidget(ver_lbl)
+        top.addLayout(name_col)
+        top.addStretch()
+        lay.addLayout(top)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"color: {C['bor']};")
+        lay.addWidget(sep)
+
+        desc = QLabel(
+            "Desktop playback client for SignalScope compliance logger "
+            "recordings.\nBrowse streams, navigate timelines, and export "
+            "clips from any hub or\nlocal/network recording directory."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 12px; color: {C['mu']}; line-height: 1.5;")
+        lay.addWidget(desc)
+
+        # GitHub link
+        gh_lbl = QLabel(
+            '<a href="https://github.com/itconor/SignalScopePlayer" '
+            f'style="color:{C["acc"]}; text-decoration:none;">'
+            "github.com/itconor/SignalScopePlayer</a>"
+        )
+        gh_lbl.setOpenExternalLinks(True)
+        gh_lbl.setStyleSheet("font-size: 12px;")
+        lay.addWidget(gh_lbl)
+
+        credits = QLabel("Built with Python · PySide6 / Qt · ffmpeg")
+        credits.setStyleSheet(f"font-size: 11px; color: {C['mu']};")
+        lay.addWidget(credits)
+
+        lay.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -832,6 +912,7 @@ class MainWindow(QMainWindow):
 
         self._setup_style()
         self._build_ui()
+        self._build_menu()
         self._setup_audio()
         self._load_catalog()
 
@@ -1096,6 +1177,83 @@ class MainWindow(QMainWindow):
         self._play_timer = QTimer()
         self._play_timer.setInterval(200)
         self._play_timer.timeout.connect(self._update_playback_position)
+
+    def _build_menu(self):
+        from PySide6.QtGui import QKeySequence
+        mb = self.menuBar()
+        mb.setStyleSheet(f"""
+            QMenuBar {{
+                background: {C['sur']}; color: {C['tx']};
+                border-bottom: 1px solid {C['bor']}; font-size: 13px;
+            }}
+            QMenuBar::item {{ background: transparent; padding: 4px 10px; }}
+            QMenuBar::item:selected {{ background: {C['acc']}; color: #fff; border-radius: 3px; }}
+            QMenu {{
+                background: {C['sur']}; color: {C['tx']};
+                border: 1px solid {C['bor']}; border-radius: 4px; font-size: 13px;
+            }}
+            QMenu::item {{ padding: 6px 24px; }}
+            QMenu::item:selected {{ background: {C['acc']}; color: #fff; }}
+            QMenu::separator {{ height: 1px; background: {C['bor']}; margin: 3px 8px; }}
+        """)
+
+        # File menu
+        file_menu = mb.addMenu("File")
+        reconnect_act = QAction("Reconnect / Change Source…", self)
+        reconnect_act.setShortcut(QKeySequence("Ctrl+R"))
+        reconnect_act.triggered.connect(self._reconnect)
+        file_menu.addAction(reconnect_act)
+        file_menu.addSeparator()
+        quit_act = QAction("Quit", self)
+        quit_act.setShortcut(QKeySequence.Quit)
+        quit_act.triggered.connect(self.close)
+        file_menu.addAction(quit_act)
+
+        # Playback menu
+        play_menu = mb.addMenu("Playback")
+        play_act = QAction("Play / Pause", self)
+        play_act.setShortcut(QKeySequence(Qt.Key_Space))
+        play_act.triggered.connect(self._toggle_play)
+        play_menu.addAction(play_act)
+
+        # Help menu
+        help_menu = mb.addMenu("Help")
+        about_act = QAction("About SignalScope Player…", self)
+        about_act.triggered.connect(lambda: AboutDialog(self).exec())
+        help_menu.addAction(about_act)
+        gh_act = QAction("View on GitHub…", self)
+        gh_act.triggered.connect(lambda: QUrl("https://github.com/itconor/SignalScopePlayer"))
+        from PySide6.QtGui import QDesktopServices
+        gh_act.triggered.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl("https://github.com/itconor/SignalScopePlayer")))
+        help_menu.addAction(gh_act)
+
+    def _reconnect(self):
+        self._stop_playback()
+        dlg = ConnectionDialog()
+        if dlg.exec() == QDialog.Accepted and dlg.data_source is not None:
+            self._ds = dlg.data_source
+            self._current_slug = ""
+            self._current_site = ""
+            self._current_date = ""
+            self._segments = []
+            self._meta = []
+            self._playing_seg = None
+            self._mark_in = -1
+            self._mark_out = -1
+            self.setWindowTitle(f"SignalScope Player — {self._ds.mode()} mode")
+            self._conn_label.setText(f"● {self._ds.mode().title()} mode")
+            self._conn_label.setStyleSheet(
+                f"font-size: 11px; color: {C['ok']}; background: transparent;")
+            self._stream_list.clear()
+            self._date_list.clear()
+            self._seg_grid.set_segments([])
+            self._daybar.set_segments([], 0)
+            self._track_band.set_events([])
+            self._show_band.set_events([])
+            self._mic_band.set_events([])
+            self._load_catalog()
 
     def _setup_audio(self):
         self._player = QMediaPlayer()
