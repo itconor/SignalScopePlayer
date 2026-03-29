@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1072,10 +1072,11 @@ class MainWindow(QMainWindow):
         self._current_date = ""
         self._segments = []
         self._meta = []
-        self._playing_seg = None
-        self._workers = []
-        self._mark_in = -1
-        self._mark_out = -1
+        self._playing_seg    = None
+        self._workers        = []
+        self._mark_in        = -1
+        self._mark_out       = -1
+        self._pending_seek_ms = 0
 
         self.setWindowTitle(f"SignalScope Player — {ds.mode()} mode")
         self.setMinimumSize(900, 600)
@@ -1307,9 +1308,32 @@ class MainWindow(QMainWindow):
         player_l.setContentsMargins(14, 10, 14, 10)
         player_l.setSpacing(6)
 
-        # Top row: play + info + time
+        # Top row: transport controls + info + time
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
+        top_row.setSpacing(6)
+
+        def _skip_btn(label):
+            b = QPushButton(label)
+            b.setFixedHeight(28)
+            b.setStyleSheet(f"""
+                QPushButton {{
+                    background: rgba(255,255,255,0.07); color: {C['mu']};
+                    border: 1px solid {C['bor']}; border-radius: 5px;
+                    font-size: 11px; padding: 0 7px;
+                }}
+                QPushButton:hover {{ background: rgba(255,255,255,0.14); color: {C['tx']}; }}
+                QPushButton:disabled {{ opacity: 0.3; }}
+            """)
+            return b
+
+        self._skip_bm60 = _skip_btn("« 1m")
+        self._skip_bm30 = _skip_btn("‹ 30s")
+        self._skip_bm60.clicked.connect(lambda: self._skip(-60))
+        self._skip_bm30.clicked.connect(lambda: self._skip(-30))
+        self._skip_bm60.setEnabled(False)
+        self._skip_bm30.setEnabled(False)
+        top_row.addWidget(self._skip_bm60)
+        top_row.addWidget(self._skip_bm30)
 
         self._play_btn = QPushButton("▶")
         self._play_btn.setFixedSize(36, 36)
@@ -1324,6 +1348,17 @@ class MainWindow(QMainWindow):
         self._play_btn.clicked.connect(self._toggle_play)
         self._play_btn.setEnabled(False)
         top_row.addWidget(self._play_btn)
+
+        self._skip_fp30 = _skip_btn("30s ›")
+        self._skip_fp60 = _skip_btn("1m »")
+        self._skip_fp30.clicked.connect(lambda: self._skip(30))
+        self._skip_fp60.clicked.connect(lambda: self._skip(60))
+        self._skip_fp30.setEnabled(False)
+        self._skip_fp60.setEnabled(False)
+        top_row.addWidget(self._skip_fp30)
+        top_row.addWidget(self._skip_fp60)
+
+        top_row.addSpacing(8)
 
         info_col = QVBoxLayout()
         info_col.setSpacing(1)
@@ -1582,11 +1617,12 @@ class MainWindow(QMainWindow):
         self._play_segment(seg)
 
     def _on_daybar_click(self, secs: int):
-        # Find the segment at this time
-        target_start = (secs // SEG_SECS) * SEG_SECS
+        # Find the segment containing this time and seek to the exact position
         for seg in self._segments:
-            if int(seg.get("start_s", -1)) == target_start:
-                self._play_segment(seg)
+            seg_start = int(seg.get("start_s", -1))
+            if seg_start <= secs < seg_start + SEG_SECS:
+                seek_s = max(0.0, secs - seg_start)
+                self._play_segment(seg, seek_s=seek_s)
                 return
 
     def _play_segment(self, seg: dict, seek_s: float = 0):
@@ -1609,9 +1645,54 @@ class MainWindow(QMainWindow):
                 self._current_slug, self._current_date, filename, seek_s)
             self._player.setSource(QUrl.fromLocalFile(url))
             self._p_sub.setText(f"{self._current_slug} · {self._current_date}")
+            self._pending_seek_ms = int(seek_s * 1000) if seek_s > 0 else 0
             self._player.play()
             self._play_btn.setText("⏸")
             self._play_timer.start()
+
+        for b in (self._skip_bm60, self._skip_bm30, self._skip_fp30, self._skip_fp60):
+            b.setEnabled(True)
+
+    def _skip(self, offset_s: float):
+        """Skip forward/backward by offset_s seconds relative to current position.
+
+        Works across segment boundaries: calculates the absolute target time,
+        finds the segment that contains it, and calls _play_segment with the
+        correct seek_s offset within that segment.
+        """
+        if not self._playing_seg or not self._segments:
+            return
+        # Current absolute time
+        cur_abs = self._playing_seg.get("start_s", 0) + self._scrub.value()
+        target_abs = cur_abs + offset_s
+        target_abs = max(0.0, target_abs)
+
+        # Find segment containing target_abs
+        best_seg = None
+        for seg in self._segments:
+            ss = seg.get("start_s", 0)
+            if ss <= target_abs < ss + SEG_SECS:
+                best_seg = seg
+                break
+
+        if best_seg is None:
+            # Target beyond last segment end — clamp to last segment
+            if offset_s > 0:
+                best_seg = max(self._segments,
+                               key=lambda s: s.get("start_s", 0), default=None)
+                if best_seg:
+                    target_abs = best_seg.get("start_s", 0) + SEG_SECS - 1
+            else:
+                best_seg = min(self._segments,
+                               key=lambda s: s.get("start_s", 0), default=None)
+                if best_seg:
+                    target_abs = best_seg.get("start_s", 0)
+
+        if not best_seg:
+            return
+
+        seek_s = max(0.0, target_abs - best_seg.get("start_s", 0))
+        self._play_segment(best_seg, seek_s=seek_s)
 
     def _toggle_play(self):
         if self._player.playbackState() == QMediaPlayer.PlayingState:
@@ -1627,6 +1708,8 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._play_btn.setText("▶")
         self._play_btn.setEnabled(False)
+        for b in (self._skip_bm60, self._skip_bm30, self._skip_fp30, self._skip_fp60):
+            b.setEnabled(False)
         self._play_timer.stop()
         self._playing_seg = None
         self._seg_grid.set_playing(-1)
@@ -1634,7 +1717,12 @@ class MainWindow(QMainWindow):
         self._time_label.setText("00:00:00")
 
     def _on_media_status(self, status):
-        if status == QMediaPlayer.EndOfMedia:
+        # Apply deferred seek once the file is ready (direct mode only)
+        if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
+            if self._pending_seek_ms > 0:
+                self._player.setPosition(self._pending_seek_ms)
+                self._pending_seek_ms = 0
+        elif status == QMediaPlayer.EndOfMedia:
             # Auto-advance to next segment
             if self._playing_seg and self._segments:
                 cur_s = int(self._playing_seg.get("start_s", -1))
