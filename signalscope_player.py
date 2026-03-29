@@ -38,7 +38,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.2.0"
+__version__ = "1.2.1"
+
+# ─── Brand assets ─────────────────────────────────────────────────────────────
+def _asset(name: str) -> str:
+    """Return absolute path to a bundled asset, or '' if not found."""
+    here = Path(__file__).parent
+    p = here / name
+    return str(p) if p.exists() else ""
 
 # ─── Color scheme (matches SignalScope logger web UI) ─────────────────────────
 C = {
@@ -702,11 +709,24 @@ class ConnectionDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Title
-        title = QLabel("SignalScope Player")
-        title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['acc']};")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        # Logo / title
+        logo_path = _asset("signalscope_logo.jpg")
+        if logo_path:
+            from PySide6.QtGui import QPixmap
+            logo_lbl = QLabel()
+            px = QPixmap(logo_path).scaledToWidth(360, Qt.SmoothTransformation)
+            logo_lbl.setPixmap(px)
+            logo_lbl.setAlignment(Qt.AlignCenter)
+            layout.addWidget(logo_lbl)
+            sub = QLabel("Player")
+            sub.setStyleSheet(f"font-size: 13px; color: {C['mu']}; margin-top: -6px;")
+            sub.setAlignment(Qt.AlignCenter)
+            layout.addWidget(sub)
+        else:
+            title = QLabel("SignalScope Player")
+            title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {C['acc']};")
+            title.setAlignment(Qt.AlignCenter)
+            layout.addWidget(title)
 
         tabs = QTabWidget()
         layout.addWidget(tabs)
@@ -830,26 +850,29 @@ class AboutDialog(QDialog):
         """)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 24, 28, 20)
+        lay.setContentsMargins(28, 20, 28, 20)
         lay.setSpacing(10)
 
-        # Icon + name row
-        top = QHBoxLayout()
-        icon = QLabel("🎙")
-        icon.setStyleSheet("font-size: 36px;")
-        top.addWidget(icon)
-        name_col = QVBoxLayout()
-        name_col.setSpacing(2)
-        name_lbl = QLabel("SignalScope Player")
-        name_lbl.setStyleSheet(
-            f"font-size: 18px; font-weight: bold; color: {C['acc']};")
-        ver_lbl = QLabel(f"Version {__version__}")
+        # Logo banner
+        logo_path = _asset("signalscope_logo.jpg")
+        if logo_path:
+            from PySide6.QtGui import QPixmap
+            logo_lbl = QLabel()
+            px = QPixmap(logo_path).scaledToWidth(360, Qt.SmoothTransformation)
+            logo_lbl.setPixmap(px)
+            logo_lbl.setAlignment(Qt.AlignCenter)
+            lay.addWidget(logo_lbl)
+        else:
+            name_lbl = QLabel("SignalScope Player")
+            name_lbl.setStyleSheet(
+                f"font-size: 18px; font-weight: bold; color: {C['acc']};")
+            name_lbl.setAlignment(Qt.AlignCenter)
+            lay.addWidget(name_lbl)
+
+        ver_lbl = QLabel(f"Player  ·  Version {__version__}")
         ver_lbl.setStyleSheet(f"font-size: 12px; color: {C['mu']};")
-        name_col.addWidget(name_lbl)
-        name_col.addWidget(ver_lbl)
-        top.addLayout(name_col)
-        top.addStretch()
-        lay.addLayout(top)
+        ver_lbl.setAlignment(Qt.AlignCenter)
+        lay.addWidget(ver_lbl)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -984,9 +1007,18 @@ class MainWindow(QMainWindow):
         hdr_l = QHBoxLayout(header)
         hdr_l.setContentsMargins(14, 0, 14, 0)
 
-        logo = QLabel("🎙")
-        logo.setStyleSheet("font-size: 20px; background: transparent;")
-        hdr_l.addWidget(logo)
+        icon_path = _asset("signalscope_icon.png")
+        if icon_path:
+            from PySide6.QtGui import QPixmap
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(
+                QPixmap(icon_path).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            icon_lbl.setStyleSheet("background: transparent;")
+            hdr_l.addWidget(icon_lbl)
+        else:
+            logo = QLabel("🎙")
+            logo.setStyleSheet("font-size: 20px; background: transparent;")
+            hdr_l.addWidget(logo)
 
         title = QLabel("SignalScope Player")
         title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C['tx']}; background: transparent;")
@@ -1551,6 +1583,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("SignalScope Player")
     app.setStyle("Fusion")
+
+    icon_path = _asset("signalscope_icon.ico") or _asset("signalscope_icon.png")
+    if icon_path:
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(icon_path))
 
     # Dark palette
     palette = QPalette()
