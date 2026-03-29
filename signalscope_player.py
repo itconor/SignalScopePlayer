@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.3"
+__version__ = "1.3.4"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -202,7 +202,8 @@ class HubDataSource(DataSource):
         Both URLs include ?token= so QMediaPlayer can fetch without custom headers.
         """
         body = json.dumps({
-            "slug": slug, "date": date, "filename": filename, "site": site,
+            "slug": slug, "date": date, "filename": filename,
+            "site": site, "seek_s": seek_s,
         }).encode()
         req  = urllib.request.Request(
             f"{self._url}/api/mobile/logger/play_file",
