@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1440,7 +1440,7 @@ class MainWindow(QMainWindow):
             self._stream_list.clear()
             self._date_list.clear()
             self._seg_grid.set_segments([])
-            self._daybar.set_segments([], 0)
+            self._daybar.set_segments([])
             self._track_band.set_events([])
             self._show_band.set_events([])
             self._mic_band.set_events([])
