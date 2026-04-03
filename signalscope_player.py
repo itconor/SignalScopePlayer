@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.10"
+__version__ = "1.3.11"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1955,10 +1955,13 @@ class MainWindow(QMainWindow):
 
         fmt = self._export_fmt.currentText().lower()
         ext = {"mp3": "mp3", "aac": "m4a", "opus": "ogg"}.get(fmt, "mp3")
+        default_name = (f"{self._current_slug}_{self._current_date}"
+                        f"_{_fmt_time(self._mark_in).replace(':','-')}.{ext}")
+        # Use Desktop as the starting directory — inside a compiled .app the
+        # CWD is '/' so a bare filename would try to save to the root filesystem.
+        default_path = str(Path.home() / "Desktop" / default_name)
         save_path, _ = QFileDialog.getSaveFileName(
-            self, "Export Clip",
-            f"{self._current_slug}_{self._current_date}_{_fmt_time(self._mark_in).replace(':','-')}.{ext}",
-            f"Audio (*.{ext})")
+            self, "Export Clip", default_path, f"Audio (*.{ext})")
         if not save_path:
             return
 
