@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import ssl
 import struct
 import subprocess
 import sys
@@ -22,6 +23,11 @@ import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+# SSL: accept self-signed / private CA certs (common for self-hosted hubs).
+# Global monkey-patch required for PyInstaller bundles on macOS/Windows
+# where no system CA store is available to urllib.
+ssl._create_default_https_context = ssl._create_unverified_context
 
 from PySide6.QtCore import (
     Qt, QTimer, QUrl, Signal, Slot, QThread, QSize, QRect, QPoint,
@@ -39,7 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.6"
+__version__ = "1.3.7"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:

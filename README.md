@@ -74,3 +74,23 @@ Direct mode: App  -->  catalog.json                  -->  stream list
 ## Settings
 
 Connection details are saved to `~/.signalscope_player.json` and restored on next launch.
+
+## Changelog
+
+### 1.3.7
+- SSL: global monkey-patch (`ssl._create_default_https_context`) fixes hub login in compiled macOS/Windows bundles where no system CA store is available
+
+### 1.3.6
+- Fix `_asset()` for PyInstaller `--onefile` packaging
+
+### 1.3.5
+- Generation counter, safe pending seek, hub relay fixes
+
+### 1.3.4
+- Fix `seek_s` dropped from `prepare_play` POST body
+
+### 1.3.3
+- Skip buttons and exact-time DayBar seeking
+
+### 1.3.2
+- Fix hub mode audio (serve OGG/MP3 directly)
