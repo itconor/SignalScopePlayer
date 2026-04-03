@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.8"
+__version__ = "1.3.9"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1962,8 +1962,28 @@ class MainWindow(QMainWindow):
         if not save_path:
             return
 
-        # Collect segments in range
-        ffmpeg = "ffmpeg"
+        # Locate ffmpeg — compiled bundles don't inherit the user's PATH
+        import shutil, stat
+        # Prefer bundled copy inside the .app (added via --add-binary)
+        _bundled = _asset("ffmpeg")
+        if _bundled and Path(_bundled).exists():
+            ffmpeg = _bundled
+            Path(_bundled).chmod(Path(_bundled).stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
+        else:
+            ffmpeg = (shutil.which("ffmpeg") or
+                      ("/opt/homebrew/bin/ffmpeg"
+                       if Path("/opt/homebrew/bin/ffmpeg").exists() else None) or
+                      ("/usr/local/bin/ffmpeg"
+                       if Path("/usr/local/bin/ffmpeg").exists() else None))
+        if not ffmpeg:
+            QMessageBox.warning(
+                self, "ffmpeg not found",
+                "Export requires ffmpeg, which is not installed.\n\n"
+                "Install it with:\n"
+                "  brew install ffmpeg\n\n"
+                "Or download from https://ffmpeg.org/download.html")
+            return
+
         files = []
         for seg in self._segments:
             ss = seg.get("start_s", 0)

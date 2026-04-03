@@ -77,6 +77,9 @@ Connection details are saved to `~/.signalscope_player.json` and restored on nex
 
 ## Changelog
 
+### 1.3.9
+- Export: locate ffmpeg via `shutil.which` + common Homebrew/local paths so it works inside compiled bundles; show a clear install message if not found instead of a raw errno
+
 ### 1.3.8
 - Silence ranges visualised on scrub bar as dark-red zones
 - Red silence strip at the base of each segment block in the grid (proportional to silence %)
