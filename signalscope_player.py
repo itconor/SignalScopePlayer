@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.9"
+__version__ = "1.3.10"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -1962,14 +1962,15 @@ class MainWindow(QMainWindow):
         if not save_path:
             return
 
-        # Locate ffmpeg — compiled bundles don't inherit the user's PATH
+        # Locate ffmpeg — imageio_ffmpeg provides a static ARM64 binary
         import shutil, stat
-        # Prefer bundled copy inside the .app (added via --add-binary)
-        _bundled = _asset("ffmpeg")
-        if _bundled and Path(_bundled).exists():
-            ffmpeg = _bundled
-            Path(_bundled).chmod(Path(_bundled).stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
-        else:
+        ffmpeg = None
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
+        if not ffmpeg:
             ffmpeg = (shutil.which("ffmpeg") or
                       ("/opt/homebrew/bin/ffmpeg"
                        if Path("/opt/homebrew/bin/ffmpeg").exists() else None) or

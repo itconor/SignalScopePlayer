@@ -77,6 +77,9 @@ Connection details are saved to `~/.signalscope_player.json` and restored on nex
 
 ## Changelog
 
+### 1.3.10
+- Export: use `imageio-ffmpeg` static ARM64 binary bundled inside the app — no Homebrew or separate ffmpeg install needed; falls back to system ffmpeg if available
+
 ### 1.3.9
 - Export: locate ffmpeg via `shutil.which` + common Homebrew/local paths so it works inside compiled bundles; show a clear install message if not found instead of a raw errno
 
