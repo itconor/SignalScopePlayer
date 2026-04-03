@@ -77,6 +77,13 @@ Connection details are saved to `~/.signalscope_player.json` and restored on nex
 
 ## Changelog
 
+### 1.3.8
+- Silence ranges visualised on scrub bar as dark-red zones
+- Red silence strip at the base of each segment block in the grid (proportional to silence %)
+- Gap segments shown in dark blue (distinct from "no recording")
+- Stereo streams marked `◈` in the stream list; STEREO badge shown in player bar
+- `n_ch` read from `catalog.json` in direct mode for stereo detection
+
 ### 1.3.7
 - SSL: global monkey-patch (`ssl._create_default_https_context`) fixes hub login in compiled macOS/Windows bundles where no system CA store is available
 

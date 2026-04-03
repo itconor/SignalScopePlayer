@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # ─── Version ──────────────────────────────────────────────────────────────────
-__version__ = "1.3.7"
+__version__ = "1.3.8"
 
 # ─── Brand assets ─────────────────────────────────────────────────────────────
 def _asset(name: str) -> str:
@@ -75,6 +75,7 @@ C = {
     "seg_ok":     "#166534",
     "seg_warn":   "#78350f",
     "seg_silent": "#7f1d1d",
+    "seg_gap":    "#1e3a8a",
     "seg_none":   "#0e2040",
     "seg_future": "#0a1828",
     "hdr_bg":     "#0a1f41",
@@ -95,11 +96,13 @@ def _fmt_time(secs: float) -> str:
 
 
 def _seg_color(seg: dict) -> str:
-    sil = seg.get("silence_pct", 0.0)
     if seg.get("_none"):
         return C["seg_none"]
     if seg.get("_future"):
         return C["seg_future"]
+    if seg.get("quality") == "gap":
+        return C["seg_gap"]
+    sil = seg.get("silence_pct", 0.0)
     if sil > 80:
         return C["seg_silent"]
     if sil > 10:
@@ -258,11 +261,14 @@ class DirectDataSource(DataSource):
             return result
         try:
             data = json.loads(cat_path.read_text())
-            return [{"slug": slug, "name": info.get("name", slug),
-                     "site": info.get("owner", "local"),
-                     "owner": info.get("owner", "local"),
-                     "rec_format": info.get("rec_format", "mp3")}
-                    for slug, info in data.items()]
+            return [{"slug": slug,
+                     "name":       info.get("name", slug),
+                     "site":       info.get("owner", "local"),
+                     "owner":      info.get("owner", "local"),
+                     "rec_format": info.get("rec_format", "mp3"),
+                     "n_ch":       int(info.get("n_ch", 1) or 1)}
+                    for slug, info in data.items()
+                    if isinstance(info, dict)]
         except Exception:
             return []
 
@@ -699,6 +705,15 @@ class SegmentGrid(QWidget):
                 p.setBrush(QColor(color))
                 p.drawRoundedRect(rect, 3, 3)
 
+                # Silence strip at block base (proportional to silence_pct)
+                if seg:
+                    sil_pct = seg.get("silence_pct", 0.0)
+                    if sil_pct > 0:
+                        strip_w = max(1, int(rect.width() * sil_pct / 100))
+                        p.setBrush(QColor("#7f1d1d"))
+                        p.drawRect(rect.x(), rect.bottom() - 3,
+                                   strip_w, 3)
+
                 # Selection / playing outlines
                 if start_s == self._playing_s:
                     p.setPen(QPen(QColor(C["ok"]), 2))
@@ -831,6 +846,104 @@ def _make_btn(text: str, color: str = None, small: bool = False) -> QPushButton:
         QPushButton:disabled {{ opacity: 0.4; }}
     """)
     return btn
+
+
+# ─── Scrub Bar with silence-range visualisation ───────────────────────────────
+
+class ScrubBar(QWidget):
+    """Horizontal scrub bar.  Silence ranges are shown as dark-red zones."""
+    released = Signal(int)   # emitted on mouse-release with current value
+
+    TRACK_H = 6
+    KNOB_R  = 7
+
+    def __init__(self):
+        super().__init__()
+        self._val    = 0
+        self._max    = SEG_SECS
+        self._ranges = []       # [[start_s, end_s], ...]
+        self._dragging = False
+        self.setFixedHeight(24)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    # ── Public API (QSlider-compatible) ────────────────────────────────────
+    def setValue(self, v: int):
+        self._val = max(0, min(self._max, v))
+        self.update()
+
+    def value(self) -> int:
+        return self._val
+
+    def setRange(self, lo: int, hi: int):
+        self._max = max(1, hi)
+        self.update()
+
+    def blockSignals(self, b: bool):   # no-op — we don't emit on setValue
+        pass
+
+    def set_silence_ranges(self, ranges: list):
+        self._ranges = ranges or []
+        self.update()
+
+    # ── Internal ────────────────────────────────────────────────────────────
+    def _val_at(self, x: float) -> int:
+        return int(max(0, min(self._max, x / max(1, self.width()) * self._max)))
+
+    def _x_of(self) -> int:
+        return int(self._val / max(1, self._max) * self.width())
+
+    # ── Paint ───────────────────────────────────────────────────────────────
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h  = self.width(), self.height()
+        mid   = h // 2
+        th    = self.TRACK_H
+        ty    = mid - th // 2
+
+        # Track background
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(C["sur"]))
+        p.drawRoundedRect(0, ty, w, th, 3, 3)
+
+        # Silence zones (dark red)
+        p.setBrush(QColor("#6b1c1c"))
+        for r in self._ranges:
+            x1 = int(r[0] / self._max * w)
+            x2 = int(r[1] / self._max * w)
+            if x2 > x1:
+                p.drawRect(x1, ty, x2 - x1, th)
+
+        # Played portion
+        px = self._x_of()
+        if px > 0:
+            p.setBrush(QColor(C["acc"]))
+            p.drawRoundedRect(0, ty, px, th, 3, 3)
+
+        # Handle knob
+        p.setPen(QPen(QColor(C["bor"]), 1))
+        p.setBrush(QColor(C["acc"]))
+        p.drawEllipse(QPoint(px, mid), self.KNOB_R, self.KNOB_R)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._val = self._val_at(event.position().x())
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self._val = self._val_at(event.position().x())
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self._val = self._val_at(event.position().x())
+            self.update()
+            self.released.emit(self._val)
 
 
 # ─── Connection Dialog ────────────────────────────────────────────────────────
@@ -1082,6 +1195,7 @@ class MainWindow(QMainWindow):
         self._current_slug = ""
         self._current_site = ""
         self._current_date = ""
+        self._current_n_ch = 1
         self._segments = []
         self._meta = []
         self._playing_seg    = None
@@ -1393,13 +1507,22 @@ class MainWindow(QMainWindow):
             font-size: 12px; color: {C['mu']}; background: transparent;
         """)
         top_row.addWidget(self._time_label)
+
+        self._stereo_badge = QLabel("STEREO")
+        self._stereo_badge.setStyleSheet(f"""
+            font-size: 9px; font-weight: bold; color: {C['acc']};
+            background: rgba(23,168,255,0.15); border: 1px solid {C['acc']};
+            border-radius: 3px; padding: 1px 5px;
+        """)
+        self._stereo_badge.setVisible(False)
+        top_row.addWidget(self._stereo_badge)
+
         player_l.addLayout(top_row)
 
-        # Scrub bar
-        self._scrub = QSlider(Qt.Horizontal)
+        # Scrub bar (custom — shows silence zones)
+        self._scrub = ScrubBar()
         self._scrub.setRange(0, SEG_SECS)
-        self._scrub.setValue(0)
-        self._scrub.sliderReleased.connect(self._on_scrub_seek)
+        self._scrub.released.connect(self._on_scrub_seek)
         player_l.addWidget(self._scrub)
 
         # Export row
@@ -1582,9 +1705,11 @@ class MainWindow(QMainWindow):
     def _populate_streams(self, catalog: list):
         self._stream_list.clear()
         for entry in catalog:
-            name = entry.get("name", entry.get("slug", "?"))
-            site = entry.get("site", "")
-            label = f"{name}  ({site})" if site else name
+            name  = entry.get("name", entry.get("slug", "?"))
+            site  = entry.get("site", "")
+            n_ch  = int(entry.get("n_ch", 1) or 1)
+            stereo_mark = " ◈" if n_ch >= 2 else ""
+            label = f"{name}{stereo_mark}  ({site})" if site else f"{name}{stereo_mark}"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, entry)
             self._stream_list.addItem(item)
@@ -1595,6 +1720,7 @@ class MainWindow(QMainWindow):
         entry = current.data(Qt.UserRole)
         self._current_slug = entry.get("slug", "")
         self._current_site = entry.get("site", "")
+        self._current_n_ch = int(entry.get("n_ch", 1) or 1)
         self._current_date = ""
         self._segments = []
         self._seg_grid.set_segments([])
@@ -1652,6 +1778,12 @@ class MainWindow(QMainWindow):
         self._seg_grid.set_playing(int(start_s))
         self._p_title.setText(f"{_fmt_time(start_s)}  —  {filename}")
         self._play_btn.setEnabled(True)
+
+        # Silence zones on scrub bar
+        self._scrub.set_silence_ranges(seg.get("silence_ranges", []))
+
+        # Stereo badge
+        self._stereo_badge.setVisible(self._current_n_ch >= 2)
 
         if self._ds.mode() == "hub":
             self._p_sub.setText("Connecting…")
